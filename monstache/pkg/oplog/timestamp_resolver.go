@@ -2,10 +2,11 @@ package oplog
 
 import (
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"log"
 	"sync"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // A TimestampResolver decides on a timestamp from which to start reading an oplog from.
@@ -97,7 +98,7 @@ func (resolver *TimestampResolverEarliest) updateEarliestTs(source string, candi
 	// and among timestamps from the same source, the earlier is preferred
 	if resolver.earliestTs.T == 0 ||
 		(resolver.earliestTsSource == TS_SOURCE_OPLOG && source == TS_SOURCE_MONSTACHE) ||
-		(primitive.CompareTimestamp(candidateTs, resolver.earliestTs) < 0) {
+		(candidateTs.Compare(resolver.earliestTs) < 0) {
 		resolver.logger.Printf(
 			"Candidate resume timestamp: %s, source: %s",
 			tsToString(candidateTs),

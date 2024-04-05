@@ -11,7 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -34,22 +34,22 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sts"
+	"github.com/olivere/elastic/v7"
+	aws "github.com/olivere/elastic/v7/aws/v4"
 
-	"github.com/rwynn/monstache/v6/pkg/oplog"
+	"github.com/Ztkent/monstache/pkg/oplog"
 
 	"github.com/BurntSushi/toml"
+	"github.com/Ztkent/monstache/pkg/monstachemap"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/coreos/go-systemd/daemon"
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/fsnotify/fsnotify"
-	"github.com/olivere/elastic/v7"
-	aws "github.com/olivere/elastic/v7/aws/v4"
 	"github.com/robertkrimen/otto"
 	_ "github.com/robertkrimen/otto/underscore"
 	"github.com/rwynn/gtm/v2"
 	"github.com/rwynn/gtm/v2/consistent"
-	"github.com/rwynn/monstache/v6/monstachemap"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -818,7 +818,7 @@ func opIDToString(op *gtm.Op) string {
 	case primitive.ObjectID:
 		opIDStr = id.Hex()
 	case primitive.Binary:
-		opIDStr = monstachemap.EncodeBinData(monstachemap.Binary{id})
+		opIDStr = monstachemap.EncodeBinData(monstachemap.Binary{Binary: id})
 	case float64:
 		intID := int(id)
 		if id == float64(intID) {
@@ -1045,6 +1045,7 @@ func (ic *indexClient) mapDataGolang(op *gtm.Op) error {
 		Operation:         op.Operation,
 		MongoClient:       ic.mongo,
 		UpdateDescription: op.UpdateDescription,
+		IsDirect:          op.IsSourceDirect(),
 	}
 	output, err := mapperPlugin(input)
 	if err != nil {
@@ -1914,7 +1915,7 @@ func (config *configOptions) loadPipelines() {
 			errorLog.Fatalln("Pipelines must specify path or script but not both")
 		}
 		if s.Path != "" {
-			if script, err := ioutil.ReadFile(s.Path); err == nil {
+			if script, err := os.ReadFile(s.Path); err == nil {
 				s.Script = string(script[:])
 			} else {
 				errorLog.Fatalf("Unable to load pipeline at path %s: %s", s.Path, err)
@@ -1954,7 +1955,7 @@ func (config *configOptions) loadFilters() {
 				errorLog.Fatalln("Filters must specify path or script but not both")
 			}
 			if s.Path != "" {
-				if script, err := ioutil.ReadFile(s.Path); err == nil {
+				if script, err := os.ReadFile(s.Path); err == nil {
 					s.Script = string(script[:])
 				} else {
 					errorLog.Fatalf("Unable to load filter at path %s: %s", s.Path, err)
@@ -2000,7 +2001,7 @@ func jsStringFromBinData(call otto.FunctionCall) otto.Value {
 		errorLog.Println("error could not convert bindata to type primitve.Binary")
 		return otto.NullValue()
 	}
-	s, _ := otto.ToValue(monstachemap.EncodeBinData(monstachemap.Binary{binData}))
+	s, _ := otto.ToValue(monstachemap.EncodeBinData(monstachemap.Binary{Binary: binData}))
 	return s
 }
 
@@ -2011,7 +2012,7 @@ func (config *configOptions) loadScripts() {
 				errorLog.Fatalln("Scripts must specify path or script but not both")
 			}
 			if s.Path != "" {
-				if script, err := ioutil.ReadFile(s.Path); err == nil {
+				if script, err := os.ReadFile(s.Path); err == nil {
 					s.Script = string(script[:])
 				} else {
 					errorLog.Fatalf("Unable to load script at path %s: %s", s.Path, err)
@@ -2113,7 +2114,7 @@ func (config *configOptions) decodeAsTemplate() *configOptions {
 		name, val := pair[0], pair[1]
 		env[name] = val
 	}
-	tpl, err := ioutil.ReadFile(config.ConfigFile)
+	tpl, err := os.ReadFile(config.ConfigFile)
 	if err != nil {
 		errorLog.Fatalln(err)
 	}
@@ -2711,7 +2712,7 @@ func (config *configOptions) loadVariableValueFromFile(name string, path string)
 		return name, "", fmt.Errorf("read value for %s from file failed: %s", name, err)
 	}
 	defer f.Close()
-	c, err := ioutil.ReadAll(f)
+	c, err := io.ReadAll(f)
 	if err != nil {
 		return name, "", fmt.Errorf("read value for %s from file failed: %s", name, err)
 	}
@@ -2961,7 +2962,7 @@ func (config *configOptions) NewHTTPClient() (client *http.Client, err error) {
 	if config.ElasticPemFile != "" {
 		var ca []byte
 		certs := x509.NewCertPool()
-		if ca, err = ioutil.ReadFile(config.ElasticPemFile); err == nil {
+		if ca, err = os.ReadFile(config.ElasticPemFile); err == nil {
 			if ok := certs.AppendCertsFromPEM(ca); !ok {
 				errorLog.Printf("No certs parsed successfully from %s", config.ElasticPemFile)
 			}
@@ -4333,7 +4334,7 @@ func (config *configOptions) makeShardInsertHandler() gtm.ShardInsertHandler {
 	}
 }
 
-func buildPipe(config *configOptions) func(string, bool) ([]interface{}, error) {
+func buildPipe() func(string, bool) ([]interface{}, error) {
 	if pipePlugin != nil {
 		return pipePlugin
 	} else if len(pipeEnvs) > 0 {
@@ -4888,7 +4889,7 @@ func (ic *indexClient) buildGtmOptions() *gtm.Options {
 		DirectReadNoTimeout: config.DirectReadNoTimeout,
 		DirectReadFilter:    directReadFilter,
 		Log:                 infoLog,
-		Pipe:                buildPipe(config),
+		Pipe:                buildPipe(),
 		ChangeStreamNs:      config.ChangeStreamNs,
 		DirectReadBounded:   config.DirectReadBounded,
 		MaxAwaitTime:        ic.parseMaxAwaitTime(),
