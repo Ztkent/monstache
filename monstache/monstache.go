@@ -40,6 +40,7 @@ import (
 	"github.com/ztkent/monstache/pkg/oplog"
 
 	"github.com/BurntSushi/toml"
+	"github.com/Ztkent/monstache/pkg/monstachemap"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/coreos/go-systemd/daemon"
