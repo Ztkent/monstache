@@ -4,13 +4,11 @@ import (
 	"os"
 
 	"github.com/Ztkent/monstache/pkg/monstachemap"
-
 	"github.com/sirupsen/logrus"
 )
 
 /*
  This is a Monstache Plugin, it will be run every time a new document is indexed (inserted/updated).
-
  You can implement any of the 4 supported plugin types:
 	func Map(input *monstachemap.MapperPluginInput) (output *monstachemap.MapperPluginOutput, err error)
 	func Filter(input *monstachemap.MapperPluginInput) (keep bool, err error)
@@ -18,8 +16,6 @@ import (
 	func Process(input*monstachemap.ProcessPluginInput) error
 
 Their uses are explained here: https://rwynn.github.io/monstache-site/advanced/#golang
-
-The dockerfile will build this plugin using same image of Monstache the we will are running.
 */
 
 var logger = logrus.New()
