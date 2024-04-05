@@ -34,22 +34,22 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sts"
+	"github.com/olivere/elastic/v7"
+	aws "github.com/olivere/elastic/v7/aws/v4"
 
-	"github.com/rwynn/monstache/v6/pkg/oplog"
+	"github.com/Ztkent/monstache/pkg/oplog"
 
 	"github.com/BurntSushi/toml"
+	"github.com/Ztkent/monstache/pkg/monstachemap"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/coreos/go-systemd/daemon"
 	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/fsnotify/fsnotify"
-	"github.com/olivere/elastic/v7"
-	aws "github.com/olivere/elastic/v7/aws/v4"
 	"github.com/robertkrimen/otto"
 	_ "github.com/robertkrimen/otto/underscore"
 	"github.com/rwynn/gtm/v2"
 	"github.com/rwynn/gtm/v2/consistent"
-	"github.com/rwynn/monstache/v6/monstachemap"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -820,7 +820,7 @@ func opIDToString(op *gtm.Op) string {
 	case primitive.ObjectID:
 		opIDStr = id.Hex()
 	case primitive.Binary:
-		opIDStr = monstachemap.EncodeBinData(monstachemap.Binary{id})
+		opIDStr = monstachemap.EncodeBinData(monstachemap.Binary{Binary: id})
 	case float64:
 		intID := int(id)
 		if id == float64(intID) {
@@ -1047,6 +1047,7 @@ func (ic *indexClient) mapDataGolang(op *gtm.Op) error {
 		Operation:         op.Operation,
 		MongoClient:       ic.mongo,
 		UpdateDescription: op.UpdateDescription,
+		IsDirect:          op.IsSourceDirect(),
 	}
 	output, err := mapperPlugin(input)
 	if err != nil {

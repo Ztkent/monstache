@@ -6,15 +6,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-// plugins must import this package
-// import "github.com/rwynn/monstache/monstachemap"
-
-// plugins must implement a function named "Map" with the following signature
-// func Map(input *monstachemap.MapperPluginInput) (output *monstachemap.MapperPluginOutput, err error)
-
-// plugins can be compiled using go build -buildmode=plugin -o myplugin.so myplugin.go
-// to enable the plugin start with monstache -mapper-plugin-path /path/to/myplugin.so
-
 // MapperPluginInput is the input to the Map function
 type MapperPluginInput struct {
 	Document          map[string]interface{} // the original document from MongoDB
@@ -24,6 +15,7 @@ type MapperPluginInput struct {
 	Operation         string                 // "i" for a insert or "u" for update
 	MongoClient       *mongo.Client          // MongoDB driver client
 	UpdateDescription map[string]interface{} // map describing changes to the document
+	IsDirect          bool                   // true if the document was read directly from the database
 }
 
 // MapperPluginOutput is the output of the Map function

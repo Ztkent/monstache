@@ -1,25 +1,33 @@
-# monstache
-a go daemon that syncs mongodb to elasticsearch in realtime
+# Monstache
+Go daemon that syncs MongoDB to ElasticSearch & OpenSearch in realtime.  
+This fork is provides a simple framework to build and run a custom Monstache container.
 
-[![Monstache CI](https://github.com/rwynn/monstache/workflows/Monstache%20CI/badge.svg?branch=rel6)](https://github.com/rwynn/monstache/actions?query=branch%3Arel6)
-[![Go Report Card](https://goreportcard.com/badge/github.com/rwynn/monstache)](https://goreportcard.com/report/github.com/rwynn/monstache)
+[Monstache Documentation](https://rwynn.github.io/monstache-site/)   
+[Monstache](https://github.com/rwynn/monstache/)   
 
-### Version 6
+### Support:
+This version of Monstache is designed for:
+- MongoDB 3.6+
+- Elasticsearch 7.0+
+- OpenSearch 2.0+ 
 
-This version of monstache is designed for MongoDB 3.6+ and Elasticsearch 7.0+.  It uses the official MongoDB
-golang driver and the community supported Elasticsearch driver from olivere.
+It uses the official [MongoDB Golang driver](https://github.com/mongodb/mongo-go-driver), and the community supported [Elasticsearch driver](https://github.com/olivere/elastic/v7).
 
-Some of the monstache settings related to MongoDB have been removed in this version as they are now supported in the 
-[connection string](https://github.com/mongodb/mongo-go-driver/blob/v1.0.0/x/network/connstring/connstring.go)
+## Plugins
+Follow the instructions from Monstache as reference when building a new plugin:   
+- [Plugin Options](https://rwynn.github.io/monstache-site/advanced/#golang)   
+- [Plugin Build](https://github.com/rwynn/monstache/wiki/Go-plugin-guide)
 
-### Changes from previous versions
+All plugins should be implemented in a `plugin.go` file.   
+It is expected in the `/monstache/plugin` directory, this can be changed in the `Dockerfile`.  
 
-Monstache now defaults to use change streams instead of tailing the oplog for changes.  Without any configuration
-monstache watches the entire MongoDB deployment.  You can specify specific namespaces to watch by setting the option
-`change-stream-namespaces` to an array of strings.
+Plugins support the following functions:
+```go
+func Map(input *monstachemap.MapperPluginInput) (output *monstachemap.MapperPluginOutput, err error)
+func Filter(input *monstachemap.MapperPluginInput) (keep bool, err error)
+func Pipeline(ns string, changeStream bool) (stages []interface, err error)
+func Process(input*monstachemap.ProcessPluginInput) error
+```
 
-The interface for golang plugins has changed due to the switch to the new driver. Previously the API exposed
-a `Session` field typed as a `*mgo.Session`.  Now that has been replaced with a `MongoClient` field which has the type
-`*mongo.Client`. 
-
-See the MongoDB go driver docs for details on how to use this client.
+`MapperPluginInput` and `MapperPluginOutput` are defined in the `/monstache/monstachemap` package.  
+These can be modified to enhance your plugin functionality.   
