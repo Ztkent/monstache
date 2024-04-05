@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 package main
 
 import (
@@ -11,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ztkent/monstache/pkg/monstachemap"
 	"github.com/olivere/elastic/v7"
 	"github.com/rwynn/gtm/v2"
-	"github.com/rwynn/monstache/v6/monstachemap"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -159,15 +162,15 @@ func TestExtractRelateData(t *testing.T) {
 	if data != 1 {
 		t.Fatalf("Expected extracting foo.bar value of 1")
 	}
-	data, err = extractData("foo.bar", map[string]interface{}{"foo": map[string]interface{}{"foo": 1}})
+	_, err = extractData("foo.bar", map[string]interface{}{"foo": map[string]interface{}{"foo": 1}})
 	if err == nil {
 		t.Fatalf("Expected error for missing key")
 	}
-	data, err = extractData("foo", map[string]interface{}{"bar": 1})
+	_, err = extractData("foo", map[string]interface{}{"bar": 1})
 	if err == nil {
 		t.Fatalf("Expected error for missing key")
 	}
-	data, err = extractData("foo.bar", map[string]interface{}{"foo": []string{"a", "b", "c"}})
+	_, err = extractData("foo.bar", map[string]interface{}{"foo": []string{"a", "b", "c"}})
 	if err == nil {
 		t.Fatalf("Expected error for missing key")
 	}

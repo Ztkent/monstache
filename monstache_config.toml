@@ -1,0 +1,69 @@
+# ==========================
+# General Settings
+# ==========================
+verbose = false
+
+# Set this path to enable the plugin
+mapper-plugin-path = "/bin/plugin.so"
+
+# Used to support health checks
+enable-http-server = false
+
+# Failed requests will be retried with an exponential backoff policy. 
+# The policy is set with an initial timeout of 50 ms, an exponential factor of 2, and a max wait of 20 seconds.
+elasticsearch-retry = true
+
+# ==========================
+# Cluster Settings
+# ==========================
+# Create a cluster with multiple monstache instances, extra instances will act as a fallback if the primary instance fails
+# cluster-name = "CLUSTER_NAME"
+# Attempt to resume syncing where the last job left off, automatically set to true if cluster-name is set
+# resume = false
+
+# ==========================
+# Connection Settings
+# [To prevent leaking secrets, you should use environment variables]
+# ==========================
+# Connect to MongoDB using the following URI
+# mongo-url = "mongodb://${MONGODB_USER}:${MONGODB_PASS}@${MONGODB_URI}:27017/collection"
+# Connect to the Elasticsearch/Opensearch REST API at the following node URLs
+# elasticsearch-urls = ["${OPENSEARCH_HOST}"]
+# elasticsearch-user = "${OPENSEARCH_USER}"
+# elasticsearch-password = "${OPENSEARCH_PASS}"
+
+# ==========================
+# Indexing Settings
+# ==========================
+# Select the MongoDB namespace to copy to Elasticsearch/Opensearch
+direct-read-namespaces = [""] # Direct read copies the entire collection to Elasticsearch/Opensearch
+change-stream-namespaces = [""] # Change stream listens for changes in the collection and updates Elasticsearch/Opensearch
+
+# Keep additional fields that dont exist in the Mongo document. Added from elsewhere or contain old fields.
+index-as-update = true
+
+# Compress requests indexing request
+gzip = true
+
+# Ensure that all direct read queries have a max time set on the query. 
+# This can help ensure direct reads dont chase data that is being inserted while the cursor is being exhausted.
+direct-read-no-timeout = true
+
+# Split mongo into sections for direct read
+direct-read-split-max = 8
+
+# Read each of those sections with goroutines
+elasticsearch-max-conns = 8
+direct-read-bounded = true
+exit-after-direct-reads = false
+dropped-collections = true
+dropped-databases = true
+
+# Generate indexing statistics
+# stats = true
+# Save indexing statistics
+# index-stats = true
+
+[[mapping]]
+namespace = "" # The MongoDB namespace to map
+index = "" # The Elasticsearch/Opensearch index to use
