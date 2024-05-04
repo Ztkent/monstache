@@ -3,8 +3,8 @@
 # ==========================
 verbose = false
 
-# Set this path to enable the plugin
-mapper-plugin-path = "/bin/plugin.so"
+# Set this path to enable plugins
+mapper-plugin-path = "local"
 
 # Used to support health checks
 enable-http-server = false
@@ -23,7 +23,6 @@ elasticsearch-retry = true
 
 # ==========================
 # Connection Settings
-# [To prevent leaking secrets, you should use environment variables]
 # ==========================
 # Connect to MongoDB using the following URI
 # mongo-url = "mongodb://${MONGODB_USER}:${MONGODB_PASS}@${MONGODB_URI}:27017/collection"
