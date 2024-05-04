@@ -41,6 +41,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/Ztkent/monstache/pkg/monstachemap"
+	monstache_plugin "github.com/Ztkent/monstache/plugin"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/coreos/go-systemd/daemon"
@@ -2052,8 +2053,19 @@ func (config *configOptions) loadScripts() {
 	}
 }
 
+// Because cgo is never worth it
+func (config *configOptions) loadLocalPlugins() *configOptions {
+	mapperPlugin = monstache_plugin.Map
+	filterPlugin = monstache_plugin.Filter
+	processPlugin = monstache_plugin.Process
+	pipePlugin = monstache_plugin.Pipeline
+	return config
+}
+
 func (config *configOptions) loadPlugins() *configOptions {
-	if config.MapperPluginPath != "" {
+	if config.MapperPluginPath == "local" {
+		return config.loadLocalPlugins()
+	} else if config.MapperPluginPath != "" {
 		funcDefined := false
 		p, err := plugin.Open(config.MapperPluginPath)
 		if err != nil {
