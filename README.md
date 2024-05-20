@@ -1,6 +1,6 @@
 # Monstache
 Go daemon that syncs MongoDB to ElasticSearch & OpenSearch in realtime.  
-This fork is provides a simple framework to build and run a custom Monstache container.
+This fork provides a simple framework to build and run a custom Monstache container.
 
 [Monstache](https://github.com/rwynn/monstache/)   
 [Monstache Documentation](https://rwynn.github.io/monstache-site/)   
