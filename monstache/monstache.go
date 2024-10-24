@@ -37,11 +37,9 @@ import (
 	"github.com/olivere/elastic/v7"
 	aws "github.com/olivere/elastic/v7/aws/v4"
 
-	"github.com/Ztkent/monstache/pkg/oplog"
+	"github.com/ztkent/monstache/pkg/oplog"
 
 	"github.com/BurntSushi/toml"
-	"github.com/Ztkent/monstache/pkg/monstachemap"
-	monstache_plugin "github.com/Ztkent/monstache/plugin"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/coreos/go-systemd/daemon"
@@ -51,6 +49,8 @@ import (
 	_ "github.com/robertkrimen/otto/underscore"
 	"github.com/rwynn/gtm/v2"
 	"github.com/rwynn/gtm/v2/consistent"
+	"github.com/ztkent/monstache/pkg/monstachemap"
+	monstache_plugin "github.com/ztkent/monstache/plugin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/bson/primitive"
