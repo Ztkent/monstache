@@ -3,8 +3,8 @@ package plugin
 import (
 	"os"
 
-	"github.com/Ztkent/monstache/pkg/monstachemap"
 	"github.com/sirupsen/logrus"
+	"github.com/ztkent/monstache/pkg/monstachemap"
 )
 
 /*

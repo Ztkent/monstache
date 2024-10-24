@@ -1,6 +1,6 @@
-module github.com/Ztkent/monstache
+module github.com/ztkent/monstache
 
-go 1.22
+go 1.23
 
 require (
 	github.com/BurntSushi/toml v1.3.2
