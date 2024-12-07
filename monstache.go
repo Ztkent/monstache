@@ -11,7 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -83,8 +83,8 @@ var tmNamespaces = make(map[string]bool)
 var routingNamespaces = make(map[string]bool)
 var mux sync.Mutex
 
-var chunksRegex = regexp.MustCompile("\\.chunks$")
-var systemsRegex = regexp.MustCompile("system\\..+$")
+var chunksRegex = regexp.MustCompile(`\.chunks$`)
+var systemsRegex = regexp.MustCompile(`system\..+$`)
 var exitStatus = 0
 
 const version = "6.7.17"
@@ -140,6 +140,7 @@ type indexClient struct {
 	gtmCtx             *gtm.OpCtxMulti
 	config             *configOptions
 	mongo              *mongo.Client
+	mongoWriter        *mongo.Client
 	mongoConfig        *mongo.Client
 	bulk               *elastic.BulkProcessor
 	bulkStats          *elastic.BulkProcessor
@@ -319,6 +320,7 @@ type configOptions struct {
 	EnableTemplate              bool
 	EnvDelimiter                string
 	MongoURL                    string         `toml:"mongo-url"`
+	MongoWriteURL               string         `toml:"mongo-write-url"`
 	MongoConfigURL              string         `toml:"mongo-config-url"`
 	MongoOpLogDatabaseName      string         `toml:"mongo-oplog-database-name"`
 	MongoOpLogCollectionName    string         `toml:"mongo-oplog-collection-name"`
@@ -1058,7 +1060,7 @@ func (ic *indexClient) mapDataGolang(op *gtm.Op) error {
 	} else {
 		if output.Skip {
 			op.Data = map[string]interface{}{}
-		} else if output.Passthrough == false {
+		} else if !output.Passthrough {
 			if output.Document == nil {
 				return errors.New("Map function must return a non-nil document")
 			}
@@ -1246,7 +1248,7 @@ func (ic *indexClient) processRelated(root *gtm.Op) (err error) {
 						Data:      op.Data,
 					}
 					ic.doDelete(rop)
-					q = append(q, rop)
+					q = append(q, cloneOp(rop))
 					continue
 				}
 				var srcData interface{}
@@ -1304,24 +1306,7 @@ func (ic *indexClient) processRelated(root *gtm.Op) (err error) {
 						continue
 					}
 					if processPlugin != nil {
-						pop := &gtm.Op{
-							Id:                rop.Id,
-							Operation:         rop.Operation,
-							Namespace:         rop.Namespace,
-							Source:            rop.Source,
-							Timestamp:         rop.Timestamp,
-							UpdateDescription: rop.UpdateDescription,
-						}
-						var data []byte
-						data, err = bson.Marshal(rop.Data)
-						if err == nil {
-							var m map[string]interface{}
-							err = bson.Unmarshal(data, &m)
-							if err == nil {
-								pop.Data = m
-							}
-						}
-						ic.processC <- pop
+						ic.processC <- cloneOp(rop)
 					}
 					skip := false
 					if rs2 := relates[rop.Namespace]; len(rs2) != 0 {
@@ -1336,7 +1321,7 @@ func (ic *indexClient) processRelated(root *gtm.Op) (err error) {
 							}
 						}
 						if visit {
-							q = append(q, rop)
+							q = append(q, cloneOp(rop))
 						}
 					}
 					if !skip {
@@ -1355,6 +1340,23 @@ func (ic *indexClient) processRelated(root *gtm.Op) (err error) {
 		q = nil
 	}
 	return
+}
+
+func cloneOp(op *gtm.Op) *gtm.Op {
+	if op == nil {
+		return nil
+	}
+	clone := *op
+	var data []byte
+	data, err := bson.Marshal(op.Data)
+	if err == nil {
+		var m map[string]interface{}
+		err = bson.Unmarshal(data, &m)
+		if err == nil {
+			clone.Data = m
+		}
+	}
+	return &clone
 }
 
 func (ic *indexClient) prepareDataForIndexing(op *gtm.Op) {
@@ -1557,7 +1559,7 @@ func (ic *indexClient) ensureClusterTTL() error {
 		Keys:    bson.M{"expireAt": 1},
 		Options: io,
 	}
-	col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("cluster")
+	col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("cluster")
 	iv := col.Indexes()
 	_, err := iv.CreateOne(context.Background(), im)
 	return err
@@ -1566,7 +1568,7 @@ func (ic *indexClient) ensureClusterTTL() error {
 func (ic *indexClient) enableProcess() (bool, error) {
 	var err error
 	var host string
-	col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("cluster")
+	col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("cluster")
 	findOneOpts := options.FindOne().SetProjection(bson.M{"_id": 1})
 	sr := col.FindOne(context.Background(), bson.M{"_id": ic.config.ResumeName}, findOneOpts)
 	err = sr.Err()
@@ -1598,7 +1600,7 @@ func (ic *indexClient) enableProcess() (bool, error) {
 }
 
 func (ic *indexClient) resetClusterState() error {
-	col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("cluster")
+	col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("cluster")
 	_, err := col.DeleteOne(context.Background(), bson.M{"_id": ic.config.ResumeName})
 	return err
 }
@@ -1660,7 +1662,7 @@ func (ic *indexClient) saveTokens() error {
 	if len(ic.tokens) == 0 {
 		return err
 	}
-	col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("tokens")
+	col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("tokens")
 	bwo := options.BulkWrite().SetOrdered(false)
 	var models []mongo.WriteModel
 	for streamID, token := range ic.tokens {
@@ -1687,7 +1689,7 @@ func (ic *indexClient) saveTokens() error {
 }
 
 func (ic *indexClient) saveTimestamp() error {
-	col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("monstache")
+	col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("monstache")
 	doc := map[string]interface{}{
 		"ts": ic.lastTs,
 	}
@@ -1743,7 +1745,7 @@ func (ic *indexClient) filterDirectReadNamespaces(wanted []string) (results []st
 }
 
 func (ic *indexClient) saveDirectReadNamespaces() (err error) {
-	col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("directreads")
+	col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("directreads")
 	filter := bson.M{
 		"_id": ic.config.ResumeName,
 	}
@@ -1764,6 +1766,7 @@ func (config *configOptions) parseCommandLineFlags() *configOptions {
 	flag.StringVar(&config.EnvDelimiter, "env-delimiter", ",", "A delimiter to use when splitting environment variable values")
 	flag.StringVar(&config.MongoURL, "mongo-url", "", "MongoDB server or router server connection URL")
 	flag.StringVar(&config.MongoConfigURL, "mongo-config-url", "", "MongoDB config server connection URL")
+	flag.StringVar(&config.MongoWriteURL, "mongo-write-url", "", "MongoDB connection URL for writing monstache state")
 	flag.StringVar(&config.MongoOpLogDatabaseName, "mongo-oplog-database-name", "", "Override the database name which contains the mongodb oplog")
 	flag.StringVar(&config.MongoOpLogCollectionName, "mongo-oplog-collection-name", "", "Override the collection name which contains the mongodb oplog")
 	flag.StringVar(&config.GraylogAddr, "graylog-addr", "", "Send logs to a Graylog server at this address")
@@ -1914,7 +1917,7 @@ func (config *configOptions) loadPipelines() {
 			errorLog.Fatalln("Pipelines must specify path or script but not both")
 		}
 		if s.Path != "" {
-			if script, err := ioutil.ReadFile(s.Path); err == nil {
+			if script, err := os.ReadFile(s.Path); err == nil {
 				s.Script = string(script[:])
 			} else {
 				errorLog.Fatalf("Unable to load pipeline at path %s: %s", s.Path, err)
@@ -1954,7 +1957,7 @@ func (config *configOptions) loadFilters() {
 				errorLog.Fatalln("Filters must specify path or script but not both")
 			}
 			if s.Path != "" {
-				if script, err := ioutil.ReadFile(s.Path); err == nil {
+				if script, err := os.ReadFile(s.Path); err == nil {
 					s.Script = string(script[:])
 				} else {
 					errorLog.Fatalf("Unable to load filter at path %s: %s", s.Path, err)
@@ -2000,7 +2003,7 @@ func jsStringFromBinData(call otto.FunctionCall) otto.Value {
 		errorLog.Println("error could not convert bindata to type primitve.Binary")
 		return otto.NullValue()
 	}
-	s, _ := otto.ToValue(monstachemap.EncodeBinData(monstachemap.Binary{binData}))
+	s, _ := otto.ToValue(monstachemap.EncodeBinData(monstachemap.Binary{Binary: binData}))
 	return s
 }
 
@@ -2011,7 +2014,7 @@ func (config *configOptions) loadScripts() {
 				errorLog.Fatalln("Scripts must specify path or script but not both")
 			}
 			if s.Path != "" {
-				if script, err := ioutil.ReadFile(s.Path); err == nil {
+				if script, err := os.ReadFile(s.Path); err == nil {
 					s.Script = string(script[:])
 				} else {
 					errorLog.Fatalf("Unable to load script at path %s: %s", s.Path, err)
@@ -2058,9 +2061,9 @@ func (config *configOptions) loadPlugins() *configOptions {
 		mapper, err := p.Lookup("Map")
 		if err == nil {
 			funcDefined = true
-			switch mapper.(type) {
+			switch mt := mapper.(type) {
 			case func(*monstachemap.MapperPluginInput) (*monstachemap.MapperPluginOutput, error):
-				mapperPlugin = mapper.(func(*monstachemap.MapperPluginInput) (*monstachemap.MapperPluginOutput, error))
+				mapperPlugin = mt
 			default:
 				errorLog.Fatalf("Plugin 'Map' function must be typed %T", mapperPlugin)
 			}
@@ -2068,9 +2071,9 @@ func (config *configOptions) loadPlugins() *configOptions {
 		filter, err := p.Lookup("Filter")
 		if err == nil {
 			funcDefined = true
-			switch filter.(type) {
+			switch ft := filter.(type) {
 			case func(*monstachemap.MapperPluginInput) (bool, error):
-				filterPlugin = filter.(func(*monstachemap.MapperPluginInput) (bool, error))
+				filterPlugin = ft
 			default:
 				errorLog.Fatalf("Plugin 'Filter' function must be typed %T", filterPlugin)
 			}
@@ -2079,9 +2082,9 @@ func (config *configOptions) loadPlugins() *configOptions {
 		process, err := p.Lookup("Process")
 		if err == nil {
 			funcDefined = true
-			switch process.(type) {
+			switch pt := process.(type) {
 			case func(*monstachemap.ProcessPluginInput) error:
-				processPlugin = process.(func(*monstachemap.ProcessPluginInput) error)
+				processPlugin = pt
 			default:
 				errorLog.Fatalf("Plugin 'Process' function must be typed %T", processPlugin)
 			}
@@ -2089,9 +2092,9 @@ func (config *configOptions) loadPlugins() *configOptions {
 		pipe, err := p.Lookup("Pipeline")
 		if err == nil {
 			funcDefined = true
-			switch pipe.(type) {
+			switch pt := pipe.(type) {
 			case func(string, bool) ([]interface{}, error):
-				pipePlugin = pipe.(func(string, bool) ([]interface{}, error))
+				pipePlugin = pt
 			default:
 				errorLog.Fatalf("Plugin 'Pipeline' function must be typed %T", pipePlugin)
 			}
@@ -2113,7 +2116,7 @@ func (config *configOptions) decodeAsTemplate() *configOptions {
 		name, val := pair[0], pair[1]
 		env[name] = val
 	}
-	tpl, err := ioutil.ReadFile(config.ConfigFile)
+	tpl, err := os.ReadFile(config.ConfigFile)
 	if err != nil {
 		errorLog.Fatalln(err)
 	}
@@ -2155,6 +2158,9 @@ func (config *configOptions) loadConfigFile() *configOptions {
 		}
 		if config.MongoConfigURL == "" {
 			config.MongoConfigURL = tomlConfig.MongoConfigURL
+		}
+		if config.MongoWriteURL == "" {
+			config.MongoWriteURL = tomlConfig.MongoWriteURL
 		}
 		if config.MongoOpLogDatabaseName == "" {
 			config.MongoOpLogDatabaseName = tomlConfig.MongoOpLogDatabaseName
@@ -2527,178 +2533,146 @@ func (config *configOptions) loadEnvironment() *configOptions {
 			if config.MongoURL == "" {
 				config.MongoURL = val
 			}
-			break
 		case "MONSTACHE_MONGO_CONFIG_URL":
 			if config.MongoConfigURL == "" {
 				config.MongoConfigURL = val
 			}
-			break
+		case "MONSTACHE_MONGO_WRITE_URL":
+			if config.MongoWriteURL == "" {
+				config.MongoWriteURL = val
+			}
 		case "MONSTACHE_MONGO_OPLOG_DB":
 			if config.MongoOpLogDatabaseName == "" {
 				config.MongoOpLogDatabaseName = val
 			}
-			break
 		case "MONSTACHE_MONGO_OPLOG_COL":
 			if config.MongoOpLogCollectionName == "" {
 				config.MongoOpLogCollectionName = val
 			}
-			break
 		case "MONSTACHE_ES_URLS":
 			if len(config.ElasticUrls) == 0 {
 				config.ElasticUrls = strings.Split(val, del)
 			}
-			break
 		case "MONSTACHE_ES_USER":
 			if config.ElasticUser == "" {
 				config.ElasticUser = val
 			}
-			break
 		case "MONSTACHE_ES_PASS":
 			if config.ElasticPassword == "" {
 				config.ElasticPassword = val
 			}
-			break
 		case "MONSTACHE_ES_PEM":
 			if config.ElasticPemFile == "" {
 				config.ElasticPemFile = val
 			}
-			break
 		case "MONSTACHE_ES_PKI_CERT":
 			if config.ElasticPKIAuth.CertFile == "" {
 				config.ElasticPKIAuth.CertFile = val
 			}
-			break
 		case "MONSTACHE_ES_PKI_KEY":
 			if config.ElasticPKIAuth.KeyFile == "" {
 				config.ElasticPKIAuth.KeyFile = val
 			}
-			break
 		case "MONSTACHE_ES_API_KEY":
 			if config.ElasticAPIKey == "" {
 				config.ElasticAPIKey = val
 			}
-			break
 		case "MONSTACHE_ES_VALIDATE_PEM":
 			v, err := strconv.ParseBool(val)
 			if err != nil {
 				errorLog.Fatalf("Failed to load MONSTACHE_ES_VALIDATE_PEM: %s", err)
 			}
 			config.ElasticValidatePemFile = v
-			break
 		case "MONSTACHE_WORKER":
 			if config.Worker == "" {
 				config.Worker = val
 			}
-			break
 		case "MONSTACHE_CLUSTER":
 			if config.ClusterName == "" {
 				config.ClusterName = val
 			}
-			break
 		case "MONSTACHE_DIRECT_READ_NS":
 			if len(config.DirectReadNs) == 0 {
 				config.DirectReadNs = strings.Split(val, del)
 			}
-			break
 		case "MONSTACHE_CHANGE_STREAM_NS":
 			if len(config.ChangeStreamNs) == 0 {
 				config.ChangeStreamNs = strings.Split(val, del)
 			}
-			break
 		case "MONSTACHE_DIRECT_READ_NS_DYNAMIC_EXCLUDE_REGEX":
 			if config.DirectReadExcludeRegex == "" {
 				config.DirectReadExcludeRegex = val
 			}
-			break
 		case "MONSTACHE_DIRECT_READ_NS_DYNAMIC_INCLUDE_REGEX":
 			if config.DirectReadIncludeRegex == "" {
 				config.DirectReadIncludeRegex = val
 			}
-			break
 		case "MONSTACHE_NS_REGEX":
 			if config.NsRegex == "" {
 				config.NsRegex = val
 			}
-			break
 		case "MONSTACHE_NS_EXCLUDE_REGEX":
 			if config.NsExcludeRegex == "" {
 				config.NsExcludeRegex = val
 			}
-			break
 		case "MONSTACHE_NS_DROP_REGEX":
 			if config.NsDropRegex == "" {
 				config.NsDropRegex = val
 			}
-			break
 		case "MONSTACHE_NS_DROP_EXCLUDE_REGEX":
 			if config.NsDropExcludeRegex == "" {
 				config.NsDropExcludeRegex = val
 			}
-			break
 		case "MONSTACHE_GRAYLOG_ADDR":
 			if config.GraylogAddr == "" {
 				config.GraylogAddr = val
 			}
-			break
 		case "MONSTACHE_AWS_ACCESS_KEY":
 			config.AWSConnect.AccessKey = val
-			break
 		case "MONSTACHE_AWS_SECRET_KEY":
 			config.AWSConnect.SecretKey = val
-			break
 		case "MONSTACHE_AWS_REGION":
 			config.AWSConnect.Region = val
-			break
 		case "MONSTACHE_LOG_DIR":
 			config.Logs.Info = val + "/info.log"
 			config.Logs.Warn = val + "/warn.log"
 			config.Logs.Error = val + "/error.log"
 			config.Logs.Trace = val + "/trace.log"
 			config.Logs.Stats = val + "/stats.log"
-			break
 		case "MONSTACHE_LOG_MAX_SIZE":
 			i, err := strconv.ParseInt(val, 10, 64)
 			if err != nil {
 				errorLog.Fatalf("Failed to load MONSTACHE_LOG_MAX_SIZE: %s", err)
 			}
 			config.LogRotate.MaxSize = int(i)
-			break
 		case "MONSTACHE_LOG_MAX_BACKUPS":
 			i, err := strconv.ParseInt(val, 10, 64)
 			if err != nil {
 				errorLog.Fatalf("Failed to load MONSTACHE_LOG_MAX_BACKUPS: %s", err)
 			}
 			config.LogRotate.MaxBackups = int(i)
-			break
 		case "MONSTACHE_LOG_MAX_AGE":
 			i, err := strconv.ParseInt(val, 10, 64)
 			if err != nil {
 				errorLog.Fatalf("Failed to load MONSTACHE_LOG_MAX_AGE: %s", err)
 			}
 			config.LogRotate.MaxAge = int(i)
-			break
 		case "MONSTACHE_HTTP_ADDR":
 			if config.HTTPServerAddr == "" {
 				config.HTTPServerAddr = val
 			}
-			break
 		case "MONSTACHE_FILE_NS":
 			if len(config.FileNamespaces) == 0 {
 				config.FileNamespaces = strings.Split(val, del)
 			}
-			break
 		case "MONSTACHE_PATCH_NS":
 			if len(config.PatchNamespaces) == 0 {
 				config.PatchNamespaces = strings.Split(val, del)
 			}
-			break
 		case "MONSTACHE_TIME_MACHINE_NS":
 			if len(config.TimeMachineNamespaces) == 0 {
 				config.TimeMachineNamespaces = strings.Split(val, del)
 			}
-			break
-		default:
-			continue
 		}
 	}
 	return config
@@ -2711,7 +2685,7 @@ func (config *configOptions) loadVariableValueFromFile(name string, path string)
 		return name, "", fmt.Errorf("read value for %s from file failed: %s", name, err)
 	}
 	defer f.Close()
-	c, err := ioutil.ReadAll(f)
+	c, err := io.ReadAll(f)
 	if err != nil {
 		return name, "", fmt.Errorf("read value for %s from file failed: %s", name, err)
 	}
@@ -2961,7 +2935,7 @@ func (config *configOptions) NewHTTPClient() (client *http.Client, err error) {
 	if config.ElasticPemFile != "" {
 		var ca []byte
 		certs := x509.NewCertPool()
-		if ca, err = ioutil.ReadFile(config.ElasticPemFile); err == nil {
+		if ca, err = os.ReadFile(config.ElasticPemFile); err == nil {
 			if ok := certs.AppendCertsFromPEM(ca); !ok {
 				errorLog.Printf("No certs parsed successfully from %s", config.ElasticPemFile)
 			}
@@ -3180,7 +3154,7 @@ func (ic *indexClient) doIndexing(op *gtm.Op) (err error) {
 	if ic.hasFileContent(op) {
 		ingestAttachment = op.Data["file"] != nil
 	}
-	if ic.config.IndexAsUpdate && meta.Pipeline == "" && ingestAttachment == false {
+	if ic.config.IndexAsUpdate && meta.Pipeline == "" && !ingestAttachment {
 		req := elastic.NewBulkUpdateRequest()
 		req.UseEasyJSON(ic.config.EnableEasyJSON)
 		req.Id(objectID)
@@ -3263,7 +3237,7 @@ func (ic *indexClient) doIndexing(op *gtm.Op) (err error) {
 				data[k] = v
 			}
 			data["_source_id"] = objectID
-			if ic.config.IndexOplogTime == false {
+			if !ic.config.IndexOplogTime {
 				secs := int64(op.Timestamp.T)
 				t := time.Unix(secs, 0).UTC()
 				data[ic.config.OplogTsFieldName] = op.Timestamp
@@ -3528,7 +3502,7 @@ func (ic *indexClient) doIndexStats() (err error) {
 
 func (ic *indexClient) dropDBMeta(db string) (err error) {
 	if ic.config.DeleteStrategy == statefulDeleteStrategy {
-		col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("meta")
+		col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("meta")
 		q := bson.M{"db": db}
 		_, err = col.DeleteMany(context.Background(), q)
 	}
@@ -3537,7 +3511,7 @@ func (ic *indexClient) dropDBMeta(db string) (err error) {
 
 func (ic *indexClient) dropCollectionMeta(namespace string) (err error) {
 	if ic.config.DeleteStrategy == statefulDeleteStrategy {
-		col := ic.mongo.Database(ic.config.ConfigDatabaseName).Collection("meta")
+		col := ic.mongoWriter.Database(ic.config.ConfigDatabaseName).Collection("meta")
 		q := bson.M{"namespace": namespace}
 		_, err = col.DeleteMany(context.Background(), q)
 	}
@@ -3606,7 +3580,7 @@ func (meta *indexingMeta) shouldSave(config *configOptions) bool {
 
 func (ic *indexClient) setIndexMeta(namespace, id string, meta *indexingMeta) error {
 	config := ic.config
-	col := ic.mongo.Database(config.ConfigDatabaseName).Collection("meta")
+	col := ic.mongoWriter.Database(config.ConfigDatabaseName).Collection("meta")
 	metaID := fmt.Sprintf("%s.%s", namespace, id)
 	doc := map[string]interface{}{
 		"id":        meta.ID,
@@ -4333,7 +4307,7 @@ func (config *configOptions) makeShardInsertHandler() gtm.ShardInsertHandler {
 	}
 }
 
-func buildPipe(config *configOptions) func(string, bool) ([]interface{}, error) {
+func buildPipe() func(string, bool) ([]interface{}, error) {
 	if pipePlugin != nil {
 		return pipePlugin
 	} else if len(pipeEnvs) > 0 {
@@ -4356,16 +4330,14 @@ func buildPipe(config *configOptions) func(string, bool) ([]interface{}, error) 
 						} else if data == val {
 							return nil, errors.New("Exported pipeline function must return an array")
 						} else {
-							switch data.(type) {
+							switch ds := data.(type) {
 							case []map[string]interface{}:
-								ds := data.([]map[string]interface{})
 								var is []interface{} = make([]interface{}, len(ds))
 								for i, d := range ds {
 									is[i] = deepExportValue(d)
 								}
 								return is, nil
 							case []interface{}:
-								ds := data.([]interface{})
 								if len(ds) > 0 {
 									errorLog.Fatalln("Pipeline function must return an array of objects")
 								}
@@ -4452,6 +4424,7 @@ func (ic *indexClient) setupBulk() {
 }
 
 func (ic *indexClient) run() {
+	ic.logVersionInfo()
 	ic.startNotify()
 	ic.setupFileIndexing()
 	ic.setupBulk()
@@ -4874,7 +4847,7 @@ func (ic *indexClient) buildGtmOptions() *gtm.Options {
 		Token:               token,
 		Filter:              filter,
 		NamespaceFilter:     nsFilter,
-		OpLogDisabled:       config.EnableOplog == false,
+		OpLogDisabled:       !config.EnableOplog,
 		OpLogDatabaseName:   config.MongoOpLogDatabaseName,
 		OpLogCollectionName: config.MongoOpLogCollectionName,
 		ChannelSize:         config.GtmSettings.ChannelSize,
@@ -4888,7 +4861,7 @@ func (ic *indexClient) buildGtmOptions() *gtm.Options {
 		DirectReadNoTimeout: config.DirectReadNoTimeout,
 		DirectReadFilter:    directReadFilter,
 		Log:                 infoLog,
-		Pipe:                buildPipe(config),
+		Pipe:                buildPipe(),
 		ChangeStreamNs:      config.ChangeStreamNs,
 		DirectReadBounded:   config.DirectReadBounded,
 		MaxAwaitTime:        ic.parseMaxAwaitTime(),
@@ -5020,7 +4993,7 @@ func (ic *indexClient) eventLoop() {
 	var err error
 	var allOpsVisited bool
 	timestampTicker := time.NewTicker(10 * time.Second)
-	if ic.config.Resume == false {
+	if !ic.config.Resume {
 		timestampTicker.Stop()
 	}
 	heartBeat := time.NewTicker(10 * time.Second)
@@ -5032,7 +5005,7 @@ func (ic *indexClient) eventLoop() {
 		statsTimeout, _ = time.ParseDuration(ic.config.StatsDuration)
 	}
 	printStats := time.NewTicker(statsTimeout)
-	if ic.config.Stats == false {
+	if !ic.config.Stats {
 		printStats.Stop()
 	}
 	infoLog.Println("Listening for events")
@@ -5315,15 +5288,31 @@ func buildMongoClient(config *configOptions) *mongo.Client {
 		errorLog.Fatalf("Unable to connect to MongoDB using URL %s: %s",
 			cleanMongoURL(config.MongoURL), err)
 	}
+	return mongoClient
+}
+
+func (ic *indexClient) logVersionInfo() {
 	infoLog.Printf("Started monstache version %s", version)
 	infoLog.Printf("Go version %s", runtime.Version())
 	infoLog.Printf("MongoDB go driver %s", mongoversion.Driver)
 	infoLog.Printf("Elasticsearch go driver %s", elastic.Version)
-	if mongoInfo, err := getBuildInfo(mongoClient); err == nil {
+	if mongoInfo, err := getBuildInfo(ic.mongo); err == nil {
 		infoLog.Printf("Successfully connected to MongoDB version %s", mongoInfo.Version)
-		validateFeatures(config, mongoInfo)
+		validateFeatures(ic.config, mongoInfo)
 	} else {
 		infoLog.Println("Successfully connected to MongoDB")
+	}
+}
+
+func buildMongoWriterClient(config *configOptions, mongoReaderClient *mongo.Client) *mongo.Client {
+	if config.MongoWriteURL == "" {
+		return mongoReaderClient
+
+	}
+	mongoClient, err := config.dialMongo(config.MongoWriteURL)
+	if err != nil {
+		errorLog.Fatalf("Unable to connect to MongoDB using write URL %s: %s",
+			cleanMongoURL(config.MongoWriteURL), err)
 	}
 	return mongoClient
 }
@@ -5355,6 +5344,7 @@ func main() {
 	sh.start()
 
 	mongoClient := buildMongoClient(config)
+	mongoWriterClient := buildMongoWriterClient(config, mongoClient)
 	loadBuiltinFunctions(mongoClient, config)
 
 	elasticClient := buildElasticClient(config)
@@ -5362,6 +5352,7 @@ func main() {
 	ic := &indexClient{
 		config:         config,
 		mongo:          mongoClient,
+		mongoWriter:    mongoWriterClient,
 		client:         elasticClient,
 		fileWg:         &sync.WaitGroup{},
 		indexWg:        &sync.WaitGroup{},
