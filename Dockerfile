@@ -18,4 +18,3 @@ COPY --from=build /app/monstache_config.toml /etc/monstache/monstache.toml
 # COPY --from=build-plugin /app/build/plugin.so /bin/plugin.so
 
 ENTRYPOINT /bin/monstache -f /etc/monstache/monstache.toml -mongo-url ${MONGODB_URI} -elasticsearch-url ${OPENSEARCH_HOST} -elasticsearch-user ${OPENSEARCH_USER} -elasticsearch-password ${OPENSEARCH_PASS}
-
